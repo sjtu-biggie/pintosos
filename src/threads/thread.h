@@ -154,6 +154,8 @@ void thread_yield (void);
 typedef void thread_action_func (struct thread *t, void *aux);
 void thread_foreach (thread_action_func *, void *);
 
+bool thread_is_alive(struct thread*);
+
 scheduler_type thread_get_priority_any (struct thread*);
 int thread_get_priority (void);
 void thread_set_priority (int);
