@@ -235,9 +235,10 @@ lock_acquire (struct lock *lock)
 
     
     sema_down (&lock->semaphore);
-    /*lock->holder has been changed*/
     if(thread_current()->wait_on_thread){
-      thread_retrieve_donation(thread_current()->wait_on_thread, lock);
+      if(thread_is_alive(thread_current()->wait_on_thread)){
+        thread_retrieve_donation(thread_current()->wait_on_thread, lock);
+      }
       thread_current()->wait_on_lock = NULL;
       thread_current()->wait_on_thread = NULL;
     }
@@ -248,6 +249,7 @@ lock_acquire (struct lock *lock)
     struct list* waiters = &(lock->semaphore.waiters);
     for(struct list_elem *e = list_begin(waiters); e != list_end(waiters); e = list_next(e)){
       struct thread* waiting_thread = list_entry(e, struct thread, elem);
+      if(waiting_thread == thread_current()) continue;
       waiting_thread->wait_on_lock = lock;
       waiting_thread->wait_on_thread = thread_current();
       thread_accept_donation(thread_current(), waiting_thread, lock);
@@ -255,7 +257,6 @@ lock_acquire (struct lock *lock)
 
     intr_set_level (old_level);
   }else{
-    ASSERT(0);
     sema_down (&lock->semaphore);
     lock->holder = thread_current ();
   }

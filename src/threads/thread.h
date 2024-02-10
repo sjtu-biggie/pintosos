@@ -103,6 +103,8 @@ struct thread
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
     
+    struct list_elem mlfqs_elem;        /* List element. */
+
     /* Who is waiting on this who*/
     struct list priority_list;
     
@@ -114,6 +116,7 @@ struct thread
 
     int64_t sleep_time;
     struct semaphore sleep_semaphore;
+    int nice;
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */

@@ -11,7 +11,7 @@ typedef enum scheduler_type{
 } scheduler_type ;
 
 void set_scheduler(scheduler_type);
-scheduler_type get_scheduler_type();
+scheduler_type get_scheduler_type(void);
 struct thread* next_thread_to_run(struct list *ready_list);
 
 #endif
