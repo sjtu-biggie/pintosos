@@ -16,5 +16,6 @@ fixed_point div_constant(fixed_point a, int b);
 fixed_point to_fixed_point(int value);
 
 int to_integer(fixed_point value);
+int to_integer_nearest(fixed_point value);
 
 #endif

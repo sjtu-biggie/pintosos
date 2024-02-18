@@ -126,6 +126,7 @@ sema_up (struct semaphore *sema)
             thread_to_operate = t;
         }
     }
+    ASSERT(thread_to_operate != NULL);
     list_remove(&thread_to_operate->elem);
     thread_unblock(thread_to_operate);
   }

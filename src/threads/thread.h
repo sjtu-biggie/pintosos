@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include "threads/synch.h"
 #include "threads/scheduler.h"
+#include "threads/fpoint.h"
 /* States in a thread's life cycle. */
 enum thread_status
   {
@@ -117,6 +118,7 @@ struct thread
     int64_t sleep_time;
     struct semaphore sleep_semaphore;
     int nice;
+    fixed_point recent_cpu;
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
@@ -166,6 +168,7 @@ void thread_set_priority (int);
 int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
+int thread_get_recent_cpu_any (struct thread*);
 int thread_get_load_avg (void);
 
 /* Accept priority donation from another thread represented by list_elem*/

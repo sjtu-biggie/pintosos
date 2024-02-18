@@ -59,9 +59,6 @@ static long long user_ticks;    /* # of timer ticks in user programs. */
 #define TIME_SLICE 4            /* # of timer ticks to give each thread. */
 static unsigned thread_ticks;   /* # of timer ticks since last yield. */
 static fixed_point load_avg;
-static fixed_point recent_cpu;
-
-static struct list* plist[PRI_MAX + 1];
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
@@ -80,6 +77,9 @@ static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
 static void try_awake(struct thread *t, void* current_time);
+static void recalculate_priority(struct thread *t, void* _);
+static void recalculate_recent_cpu(struct thread *t, void* _);
+static bool is_current_idle();
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
    general and it is possible in this case only because loader.S
@@ -153,17 +153,31 @@ thread_tick (void)
     kernel_ticks++;
 
   if(thread_mlfqs){
+    int is_not_idle = memcmp(thread_current()->name, "idle", 4) == 0 ? 0 : 1; 
+    if(is_not_idle){
+      t->recent_cpu = add_constant(t->recent_cpu, 1);
+    }
     /* Calculate recent_cpu and load_average*/
-    if((idle_ticks + kernel_ticks) % TIMER_FREQ == 0){
-      load_avg = div(to_fixed_point(59), to_fixed_point(60)) * load_avg + div(to_fixed_point(1), to_fixed_point(60)) * list_size(&ready_list);
+    if(timer_ticks() % TIMER_FREQ == 0){
+      // printf("%d, %d\n",  list_size(&ready_list), div(to_fixed_point(1), to_fixed_point(60)) * list_size(&ready_list));
+      int ready_thread_counts = list_size(&ready_list) + is_not_idle;
+      fixed_point load_avg_1 = times(div(to_fixed_point(59), to_fixed_point(60)), load_avg);
+      fixed_point load_avg_2 = times_constant(div(to_fixed_point(1), to_fixed_point(60)), ready_thread_counts);
+      load_avg = add(load_avg_1, load_avg_2);
 
-      fixed_point recent_cpu_coef = div((times_constant(load_avg, 2)), add_constant(times_constant(load_avg, 2), 1));
-      recent_cpu = times(recent_cpu, recent_cpu_coef) + t->nice;
-      t->priority = PRI_MAX - div_constant(recent_cpu, 4) - 2 * t->nice;
+      enum intr_level old_level;
+      old_level = intr_disable ();
+
+      thread_foreach(recalculate_recent_cpu, NULL);
+      thread_foreach(recalculate_priority, NULL);
+      intr_set_level (old_level);
+
+    }else if(timer_ticks() % 4 == 0){
+      // Only recalculate current thread's priority
+
+      recalculate_priority(t, NULL);
     }
   }
-
-
 
 
   /* Awake other threads */
@@ -510,9 +524,11 @@ thread_set_priority (int new_priority)
 }
 
 scheduler_type thread_get_priority_any (struct thread* t){
+  // mlfqs
   if(thread_mlfqs){
-
+      return t->priority;
   }else{
+  // priority donation
     if(list_empty(&t->priority_list)){
       return t->priority;
     }else{
@@ -520,7 +536,6 @@ scheduler_type thread_get_priority_any (struct thread* t){
       return highest_donator_block->donator_thread->priority;
     }
   }
-
 }
 
 /* Returns the current thread's priority. */
@@ -553,9 +568,14 @@ thread_get_load_avg (void)
 
 /* Returns 100 times the current thread's recent_cpu value. */
 int
-thread_get_recent_cpu (void) 
+thread_get_recent_cpu_any (struct thread* t) 
 {
-  return to_integer(times_constant(recent_cpu, 100));
+  return to_integer_nearest(t->recent_cpu);
+}
+
+int thread_get_recent_cpu ()
+{
+  return 100 * thread_get_recent_cpu_any(thread_current());
 }
 
 /* Run in external interrupt context */
@@ -565,6 +585,20 @@ static void try_awake(struct thread *t, void* current_time){
     sema_up(&t->sleep_semaphore);
     t->sleep_time = THREAD_NOT_SLEEP;
   }
+}
+
+/* run with interrupt off */
+static void recalculate_recent_cpu(struct thread *t, void* _ UNUSED){
+    fixed_point recent_cpu_coef = div((times_constant(load_avg, 2)), add_constant(times_constant(load_avg, 2), 1));
+    t->recent_cpu = add_constant(times(t->recent_cpu, recent_cpu_coef), t->nice);
+}
+
+/* run with interrupt off */
+static void recalculate_priority(struct thread *t, void* _ UNUSED){
+    int priority = PRI_MAX - thread_get_recent_cpu_any(t) / 4 - 2 * t->nice;
+    if(priority > PRI_MAX) priority = PRI_MAX;
+    if(priority < PRI_MIN) priority = PRI_MIN;
+    t->priority = priority;
 }
 
 /* Idle thread.  Executes when no other thread is ready to run.
@@ -664,6 +698,7 @@ init_thread (struct thread *t, const char *name, int priority)
   t->wait_on_thread = NULL;
 
   t->nice = 0;
+  t->recent_cpu = 0;
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);

@@ -17,11 +17,12 @@ struct thread* next_thread_to_run(struct list *ready_list){
     ASSERT(!list_empty(ready_list));
 
     switch(type){
-        case SCHEDULER_ADVANCED: {
-        }
+
         case SCHEDULER_NAIVE: {
             return list_entry (list_pop_front (ready_list), struct thread, elem);
             break;
+        }
+        case SCHEDULER_ADVANCED: {
         }
         case SCHEDULER_PRIORITY: {
             struct thread* thread_to_operate = NULL;
