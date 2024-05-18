@@ -4,7 +4,9 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
-
+#include "threads/synch.h"
+#include "threads/scheduler.h"
+#include "threads/fpoint.h"
 /* States in a thread's life cycle. */
 enum thread_status
   {
@@ -24,6 +26,9 @@ typedef int tid_t;
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
 
+#define THREAD_NOT_SLEEP -1             /* Thread Sleep State */
+
+#define MAX_NESTED_LEVEL 8
 /* A kernel thread or user process.
 
    Each thread structure is stored in its own 4 kB page.  The
@@ -80,6 +85,12 @@ typedef int tid_t;
    only because they are mutually exclusive: only a thread in the
    ready state is on the run queue, whereas only a thread in the
    blocked state is on a semaphore wait list. */
+struct donation_block{
+   struct thread* donator_thread;
+   struct lock* donator_wait_on_lock;
+   struct list_elem donation_elem;     /* List element for donation */
+};
+
 struct thread
   {
     /* Owned by thread.c. */
@@ -92,6 +103,22 @@ struct thread
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
+    
+    struct list_elem mlfqs_elem;        /* List element. */
+
+    /* Who is waiting on this who*/
+    struct list priority_list;
+    
+    // Maximum 8 nested level
+    struct donation_block donation_blocks[MAX_NESTED_LEVEL];
+
+    struct lock* wait_on_lock;
+    struct thread* wait_on_thread; 
+
+    int64_t sleep_time;
+    struct semaphore sleep_semaphore;
+    int nice;
+    fixed_point recent_cpu;
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
@@ -101,6 +128,8 @@ struct thread
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
   };
+
+
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
@@ -130,12 +159,23 @@ void thread_yield (void);
 typedef void thread_action_func (struct thread *t, void *aux);
 void thread_foreach (thread_action_func *, void *);
 
+bool thread_is_alive(struct thread*);
+
+scheduler_type thread_get_priority_any (struct thread*);
 int thread_get_priority (void);
 void thread_set_priority (int);
 
 int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
+int thread_get_recent_cpu_any (struct thread*);
 int thread_get_load_avg (void);
+
+/* Accept priority donation from another thread represented by list_elem*/
+void thread_accept_donation(struct thread*, struct thread*, struct lock*);
+void thread_retrieve_donation(struct thread*, struct lock*);
+
+void print_thread_internal(struct thread* t);
+void print_thread(char* name);
 
 #endif /* threads/thread.h */

@@ -122,7 +122,6 @@ test_mlfqs_recent_1 (void)
                    + 10 * TIMER_FREQ);
     }
   while (thread_get_recent_cpu () > 700);
-
   start_time = timer_ticks ();
   for (;;) 
     {
