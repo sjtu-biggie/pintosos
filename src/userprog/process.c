@@ -18,6 +18,8 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 
+#define MAX_PARAMS 16
+
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 
@@ -50,17 +52,77 @@ process_execute (const char *file_name)
 static void
 start_process (void *file_name_)
 {
+  char* save_ptr;
+  char* token = strtok_r (file_name_, " ", &save_ptr);
   char *file_name = file_name_;
   struct intr_frame if_;
   bool success;
+  char* position[MAX_PARAMS];
+  char* saved_param[MAX_PARAMS];
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
-  success = load (file_name, &if_.eip, &if_.esp);
 
+  success = load (file_name, &if_.eip, &if_.esp);
+  char* s = (char*)malloc(10);
+  int index = 0;
+  for (; token != NULL; token = strtok_r (NULL, " ", &save_ptr)){
+    int len = strlen(token);
+    printf("%s, %d\n",token, len);
+    saved_param[index] = (char*)malloc(len); 
+    strlcpy(saved_param[index++], token, len + 1);
+  }
+  
+  printf("argc: %d\n", index);
+
+  for(int i = index - 1; i >= 0; --i){
+    if_.esp = (char*)if_.esp - 1;
+    *(char*)if_.esp = '\0';
+    int len = strlen(saved_param[i]);
+    if_.esp = (char*)if_.esp - len;
+    memcpy(if_.esp, saved_param[i], len);
+    position[i] = if_.esp;
+    printf("%p\n", if_.esp);
+  }
+
+  // Align
+  int align_bytes = (unsigned long)if_.esp % 8;
+  printf("Aligning %d bytes for %p\n", align_bytes, if_.esp);
+  if_.esp = (char*)if_.esp - align_bytes;
+  
+  // Empty Argv
+  if_.esp = (char*)if_.esp - sizeof(void*);
+  *(char**)if_.esp = 0;  
+
+  // Real Argv
+  for(int i = index - 1; i >= 0; --i){
+    if_.esp = (char*)if_.esp - sizeof(void*);
+    *(char**)if_.esp = position[i];
+    printf("%p\n", if_.esp);
+  }
+
+  // argv ptr
+  char* argv = if_.esp;
+  if_.esp = (char*)if_.esp - sizeof(void*);
+  *(char**)if_.esp = argv;
+    printf("%p\n", if_.esp);
+
+  // argc
+  if_.esp = (char*)if_.esp - sizeof(int);
+  *(int*)if_.esp = index;
+    printf("%p\n", if_.esp);
+
+  int total_size = (int)PHYS_BASE - (int)if_.esp;
+  printf("%d\n", total_size);
+  
+  hex_dump(0, if_.esp, total_size, true);
+
+  for(int i = index - 1; i >= 0; --i){
+    free(saved_param[i]);
+  }
   /* If load failed, quit. */
   palloc_free_page (file_name);
   if (!success) 
@@ -72,6 +134,8 @@ start_process (void *file_name_)
      arguments on the stack in the form of a `struct intr_frame',
      we just point the stack pointer (%esp) to our stack frame
      and jump to it. */
+    
+  
   asm volatile ("movl %0, %%esp; jmp intr_exit" : : "g" (&if_) : "memory");
   NOT_REACHED ();
 }
@@ -315,7 +379,6 @@ load (const char *file_name, void (**eip) (void), void **esp)
   file_close (file);
   return success;
 }
-
 /* load() helpers. */
 
 static bool install_page (void *upage, void *kpage, bool writable);
