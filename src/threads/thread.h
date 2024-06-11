@@ -7,6 +7,32 @@
 #include "threads/synch.h"
 #include "threads/scheduler.h"
 #include "threads/fpoint.h"
+
+#ifdef USERPROG
+#include "userprog/fd.h"
+#endif
+
+enum exec_status
+  {
+    UNINITIALIZED,        /* load() failure */
+    INIT_SUCCESS,        /* load() failure */
+    LOAD_FAILURE,     /* load() failure */
+    LOAD_SUCCESS,     /* Not running but ready to run. */
+    THREAD_EXIT,     /* Not running but ready to run. */
+    THREAD_KILLED,     /* Not running but ready to run. */
+  };
+
+
+struct exec_block_t{
+   int pid;
+   int ppid;
+   int exit_status;
+   enum exec_status status;
+   struct semaphore exec_sem;
+   struct list_elem list_elem;
+   char* command;
+};
+
 /* States in a thread's life cycle. */
 enum thread_status
   {
@@ -95,6 +121,7 @@ struct thread
   {
     /* Owned by thread.c. */
     tid_t tid;                          /* Thread identifier. */
+    tid_t ppid;
     enum thread_status status;          /* Thread state. */
     char name[16];                      /* Name (for debugging purposes). */
     uint8_t *stack;                     /* Saved stack pointer. */
@@ -103,12 +130,15 @@ struct thread
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
-    
-    struct list_elem mlfqs_elem;        /* List element. */
 
     /* Who is waiting on this who*/
     struct list priority_list;
-    
+
+    #ifdef USERPROG
+    /* File descriptor */
+    struct fd_table_t fd_table;
+    #endif
+
     // Maximum 8 nested level
     struct donation_block donation_blocks[MAX_NESTED_LEVEL];
 
@@ -117,6 +147,9 @@ struct thread
 
     int64_t sleep_time;
     struct semaphore sleep_semaphore;
+
+    int exit_status;
+
     int nice;
     fixed_point recent_cpu;
 
@@ -171,11 +204,19 @@ int thread_get_recent_cpu (void);
 int thread_get_recent_cpu_any (struct thread*);
 int thread_get_load_avg (void);
 
+
 /* Accept priority donation from another thread represented by list_elem*/
 void thread_accept_donation(struct thread*, struct thread*, struct lock*);
 void thread_retrieve_donation(struct thread*, struct lock*);
 
-void print_thread_internal(struct thread* t);
+/* Exec */
+struct thread* get_thread_by_tid(tid_t tid);
+struct exec_block_t* thread_get_exec_block_from_child(tid_t tid);
+void thread_exec_block_init(tid_t parent_tid, tid_t child_tid);
+struct exec_block_t* thread_create_exec_block(tid_t parent_tid);
+
+/* Debugging */
+void print_thread_internal(struct thread*);
 void print_thread(char* name);
 
 #endif /* threads/thread.h */

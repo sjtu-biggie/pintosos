@@ -1,6 +1,9 @@
 #ifndef __LIB_DEBUG_H
 #define __LIB_DEBUG_H
 
+#define DEBUG 1
+#define debug_printf(format, ...) if(DEBUG) printf(format, ##__VA_ARGS__)
+
 /* GCC lets us add "attributes" to functions, function
    parameters, etc. to indicate their properties.
    See the GCC manual for details. */
