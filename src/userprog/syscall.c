@@ -16,12 +16,13 @@
 
 
 
-#define GET_ARGUMENT(ptr, index, type) *(type*)((uint32_t)(ptr) + 4 * index)
+#define GET_ARGUMENT(ptr, index, type) is_valid((void*)((uint32_t)(ptr) + 4 * index + 3))?*(type*)((uint32_t)(ptr) + 4 * index) : *(type*)thread_exit_with_status(-1)
 #define READ_ERROR -1
 #define READ_SUCCESS 0
 
 static void syscall_handler (struct intr_frame *);
 static bool is_valid(const void* vaddr);
+static void* thread_exit_with_status(int status);
 
 
 void
@@ -39,13 +40,27 @@ bool is_valid(const void* vaddr){
   return pagedir_get_page(active_pd(), vaddr) != NULL;
 }
 
+static void* thread_exit_with_status(int status){
+    // Normally Exit
+    struct exec_block_t* exec_block = thread_get_exec_block_from_child(thread_current()->tid);
+    if(exec_block){
+        exec_block->status = THREAD_EXIT;
+    }
+
+    thread_current()->exit_status = status;
+    thread_exit();
+
+    NOT_REACHED();
+    return NULL;
+}
+
 static void
 syscall_handler (struct intr_frame *f UNUSED) 
 {
   // intr_dump_frame(f);
   if(!is_valid(f->esp)){
     debug_printf("ERROR: invalid system call frame pointer %p\n", f->esp);
-    thread_exit();
+    thread_exit_with_status(-1);
   }
 
   struct thread* current_thread = thread_current();
@@ -61,22 +76,14 @@ syscall_handler (struct intr_frame *f UNUSED)
   }
   case SYS_EXIT:{
     int status = GET_ARGUMENT(f->esp, 1, int);
-
-    // Normally Exit
-    struct exec_block_t* exec_block = thread_get_exec_block_from_child(thread_current()->tid);
-    if(exec_block){
-        exec_block->status = THREAD_EXIT;
-    }
-
-    thread_current()->exit_status = status;
-    thread_exit();
+    thread_exit_with_status(status);
     break;
   }
   case SYS_EXEC:{
     const char* cmd_line = GET_ARGUMENT(f->esp, 1, char*);
     if(!is_valid(cmd_line)){
       debug_printf("ERROR: exec failed due to invalid filename %p\n", cmd_line);
-      thread_exit();
+      thread_exit_with_status(-1);
     }
     // Parent procesws
     tid_t tid = process_execute(cmd_line);
@@ -84,7 +91,7 @@ syscall_handler (struct intr_frame *f UNUSED)
     if(tid == TID_ERROR){
       return;
     }
-    struct exec_block_t* exec_block = thread_create_exec_block(current_thread->tid);
+    struct exec_block_t* exec_block = thread_create_exec_block(current_thread->tid, false);
     sema_down(&exec_block->exec_sem);
 
     f->eax = exec_block->status == LOAD_FAILURE ? TID_ERROR : tid;
@@ -99,39 +106,50 @@ syscall_handler (struct intr_frame *f UNUSED)
   case SYS_CREATE:{
     const char* filename = GET_ARGUMENT(f->esp, 1, char*);
     unsigned initial_size = GET_ARGUMENT(f->esp, 2, unsigned);
-    if(!is_valid(filename)){
+    if(!is_valid(filename) || !filename){
       debug_printf("ERROR: opening failed due to invalid filename %p\n", filename);
-      thread_exit();
+      thread_exit_with_status(-1);
     }
+
+    lock_acquire(&filesys_lock);
     if(!filesys_create(filename, initial_size)){
-      debug_printf("ERROR: create failed");
-      thread_exit();
+      debug_printf("ERROR: create failed\n");
+      f->eax = (uint32_t)false;
+    }else{
+      f->eax = (uint32_t)true;
     }
+    lock_release(&filesys_lock);
     break;
   }
   case SYS_REMOVE:
   {
     const char* filename = GET_ARGUMENT(f->esp, 1, char*);
-    if(!is_valid(filename)){
+    if(!is_valid(filename) || !filename){
       debug_printf("ERROR: Removing failed due to invalid filename %p\n", filename);
-      thread_exit();
+      thread_exit_with_status(-1);
     }
+    
+    lock_acquire(&filesys_lock);
     bool success = filesys_remove(filename);
+    lock_release(&filesys_lock);
+
     f->eax = success;
     break;
   }
   case SYS_OPEN:{
     char* filename = GET_ARGUMENT(f->esp, 1, char*);
-    if(!is_valid(filename)){
+    if(!is_valid(filename) || !filename){
       debug_printf("ERROR: opening failed due to invalid filename %p\n", filename);
-      thread_exit();
+      thread_exit_with_status(-1);
     }
 
     uint32_t fd_out;
     bool success = open_file(fd_table, filename, &fd_out);
     if(!success){
       debug_printf("ERROR: failed to open file%p\n", filename);
-      thread_exit();
+      f->eax = -1;
+    }else{
+      f->eax = fd_out;
     }
     break;
   }
@@ -140,10 +158,12 @@ syscall_handler (struct intr_frame *f UNUSED)
     struct file* file = get_open_file(fd_table, fd);
     if(!file){
       debug_printf("ERROR: failed to get file from fd %d\n", fd);
-      thread_exit();
+      thread_exit_with_status(-1);
     }
 
+    lock_acquire(&filesys_lock);
     f->eax = file_length(file);
+    lock_release(&filesys_lock);
     break;
   }
 
@@ -169,7 +189,9 @@ syscall_handler (struct intr_frame *f UNUSED)
         f->eax = READ_ERROR;
         return;
       }
+      lock_acquire(&filesys_lock);
       size_read = file_read(file, buffer, size);
+      lock_release(&filesys_lock);
     }
     f->eax = size_read;
     break;
@@ -182,7 +204,7 @@ syscall_handler (struct intr_frame *f UNUSED)
     uint32_t size_written = 0;
     if(!is_valid(buffer)){
       debug_printf("ERROR: writing failed due to invalid user buffer %p\n", buffer);
-      thread_exit();
+      thread_exit_with_status(-1);
     }
     if(fd == STDOUT_FILENO){
       putbuf(buffer, size);
@@ -192,9 +214,11 @@ syscall_handler (struct intr_frame *f UNUSED)
       if(!file){
         // Failed to get open file
         debug_printf("ERROR: failed to get open file for fd %d\n", fd);
-        thread_exit();
+        thread_exit_with_status(-1);
       }
+      lock_acquire(&filesys_lock);
       size_written = file_write(file, buffer, size);
+      lock_release(&filesys_lock);
     }      
 
     f->eax = size_written;
@@ -207,9 +231,11 @@ syscall_handler (struct intr_frame *f UNUSED)
     if(!file){
       // Failed to get open file
       debug_printf("ERROR: failed to get open file for fd %d\n", fd);
-      thread_exit();
+      thread_exit_with_status(-1);
     }
+    lock_acquire(&filesys_lock);
     file_seek(file, position);
+    lock_release(&filesys_lock);
     break;
   }
   case SYS_TELL:{
@@ -218,20 +244,21 @@ syscall_handler (struct intr_frame *f UNUSED)
     if(!file){
       // Failed to get open file
       debug_printf("ERROR: failed to get open file for fd %d\n", fd);
-      thread_exit();
+      thread_exit_with_status(-1);
     }
     f->eax = file_tell(file);
     break;
   }
   case SYS_CLOSE:{
     uint32_t fd = GET_ARGUMENT(f->esp, 1, uint32_t);
-    struct file* file = get_open_file(fd_table, fd);
-    if(!file){
-      // Failed to get open file
-      debug_printf("ERROR: failed to get open file for fd %d\n", fd);
-      thread_exit();
+
+    lock_acquire(&filesys_lock);
+    if(!close_file(fd_table, fd)){
+      debug_printf("ERROR: closing file failed %d\n", fd);
+      thread_exit_with_status(-1);
     }
-    file_close(file);
+    lock_release(&filesys_lock);
+
     break;
   }
   case SYS_MMAP:
@@ -243,7 +270,7 @@ syscall_handler (struct intr_frame *f UNUSED)
   case SYS_INUMBER:
   default:
     debug_printf ("ERROR: system call %d not implemented \n", syscall_number );
-    thread_exit ();
+    thread_exit_with_status(-1);
     break;
   }
 }

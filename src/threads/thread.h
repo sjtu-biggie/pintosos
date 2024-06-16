@@ -31,6 +31,7 @@ struct exec_block_t{
    struct semaphore exec_sem;
    struct list_elem list_elem;
    char* command;
+   bool initial; // If the parent is the initial process
 };
 
 /* States in a thread's life cycle. */
@@ -213,7 +214,7 @@ void thread_retrieve_donation(struct thread*, struct lock*);
 struct thread* get_thread_by_tid(tid_t tid);
 struct exec_block_t* thread_get_exec_block_from_child(tid_t tid);
 void thread_exec_block_init(tid_t parent_tid, tid_t child_tid);
-struct exec_block_t* thread_create_exec_block(tid_t parent_tid);
+struct exec_block_t* thread_create_exec_block(tid_t parent_tid, bool initial);
 
 /* Debugging */
 void print_thread_internal(struct thread*);

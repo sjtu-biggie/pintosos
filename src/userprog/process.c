@@ -19,7 +19,7 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 
-#define MAX_PARAMS 16
+#define MAX_PARAMS 32
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
@@ -54,15 +54,18 @@ process_execute (const char *file_name)
 static void
 start_process (void *file_name_)
 {
+  debug_printf("Command to parse %s\n", file_name_);
+
+  char* save_ptr;
+  char* token = strtok_r (file_name_, " ", &save_ptr);
+  
   int child_tid = thread_current()->tid;
   struct exec_block_t* block =  thread_get_exec_block_from_child(child_tid);
   if(block){
     block->command = malloc(strlen(file_name_));
-    strlcpy(block->command, file_name_, strlen(file_name_));
+    strlcpy(block->command, file_name_, strlen(file_name_) + 1);
   }
 
-  char* save_ptr;
-  char* token = strtok_r (file_name_, " ", &save_ptr);
   char *file_name = file_name_;
   struct intr_frame if_;
   bool success;
@@ -81,12 +84,13 @@ start_process (void *file_name_)
   int index = 0;
   for (; token != NULL; token = strtok_r (NULL, " ", &save_ptr)){
     int len = strlen(token);
-    debug_prinf("%s, %d\n",token, len);
+    debug_printf("%s, %d\n",token, len);
     saved_param[index] = (char*)malloc(len); 
     strlcpy(saved_param[index++], token, len + 1);
+    ASSERT(index < MAX_PARAMS);
   }
   
-  debug_prinf("argc: %d\n", index);
+  debug_printf("argc: %d\n", index);
 
   for(int i = index - 1; i >= 0; --i){
     if_.esp = (char*)if_.esp - 1;
@@ -95,12 +99,12 @@ start_process (void *file_name_)
     if_.esp = (char*)if_.esp - len;
     memcpy(if_.esp, saved_param[i], len);
     position[i] = if_.esp;
-    debug_prinf("%p\n", if_.esp);
+    debug_printf("%p\n", if_.esp);
   }
 
   // Align
   int align_bytes = (unsigned long)if_.esp % 8;
-  debug_prinf("Aligning %d bytes for %p\n", align_bytes, if_.esp);
+  debug_printf("Aligning %d bytes for %p\n", align_bytes, if_.esp);
   if_.esp = (char*)if_.esp - align_bytes;
   
   // Empty Argv
@@ -111,25 +115,25 @@ start_process (void *file_name_)
   for(int i = index - 1; i >= 0; --i){
     if_.esp = (char*)if_.esp - sizeof(void*);
     *(char**)if_.esp = position[i];
-    debug_prinf("%p\n", if_.esp);
+    debug_printf("%p\n", if_.esp);
   }
 
   // argv ptr
   char* argv = if_.esp;
   if_.esp = (char*)if_.esp - sizeof(void*);
   *(char**)if_.esp = argv;
-  debug_prinf("%p\n", if_.esp);
+  debug_printf("%p\n", if_.esp);
 
   // argc
   if_.esp = (char*)if_.esp - sizeof(int);
   *(int*)if_.esp = index;
-  debug_prinf("%p\n", if_.esp);
+  debug_printf("%p\n", if_.esp);
 
   // return address
   if_.esp = (char*)if_.esp - sizeof(void*);
   *(int*)if_.esp = 0;
-
-  debug_prinf("%d\n", total_size);
+  int total_size = (int)PHYS_BASE - (int)if_.esp;
+  debug_printf("%d\n", total_size);
   if(DEBUG){
     hex_dump(0, if_.esp, total_size, true);
   }
@@ -142,17 +146,19 @@ start_process (void *file_name_)
 
   /* This happens in the second thread of the first process */
   /* If parent thread called exec, signal it */
-  struct exec_block_t* block =  thread_get_exec_block_from_child(child_tid);
   if(block){
-    printf("Thread %d has child %d load %d\n", block->ppid, child_tid, success);
+    debug_printf("Thread %d has child %d load %d\n", block->ppid, child_tid, success);
     if(success){
       block->status = LOAD_SUCCESS;
     }else{
       block->status = LOAD_FAILURE;
     }
-    sema_up(&block->exec_sem);
+    // This `sema_up` is for exec-ed child only, so we don't do this on initial 
+    if(!block->initial){
+      sema_up(&block->exec_sem);
+    }
   }else{
-    printf("child %d load %d, no parents exec\n", child_tid, success);
+    debug_printf("child %d load %d, no parents exec\n", child_tid, success);
   }
 
   if (!success) 
@@ -185,10 +191,10 @@ int
 process_wait (tid_t child_tid UNUSED) 
 {
   // Step 1: check if child has exec block
-  printf("Parent %d try calling process_wait on child %d\n", thread_current()->tid, child_tid);
+  debug_printf("Parent %d try calling process_wait on child %d\n", thread_current()->tid, child_tid);
   struct exec_block_t* exec_block = thread_get_exec_block_from_child(child_tid);
   if(!exec_block){
-    printf("Exit block not found for %d:%d\n", thread_current()->tid, child_tid);
+    debug_printf("Exit block not found for %d:%d\n", thread_current()->tid, child_tid);
     return -1;
   }
   sema_down(&exec_block->exec_sem);

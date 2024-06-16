@@ -1,7 +1,7 @@
 #include "userprog/fd.h"
 #include "filesys/filesys.h"
 #include <debug.h>
-
+#include "threads/malloc.h"
 static bool _next_free_fd(struct fd_table_t* fd_table, uint32_t* fd_out);
 // /* Returns a hash value for fd p. */
 // static uint32_t fd_hash (const struct hash_elem *p_, void *aux UNUSED)
@@ -35,10 +35,22 @@ static bool _next_free_fd(struct fd_table_t* fd_table, uint32_t* fd_out){
 
 void fd_init(struct fd_table_t* fd_table){
     list_init(&(fd_table->fd_list));
-    
     fd_table->fd_used_list[0] = true;
     fd_table->fd_used_list[1] = true;
     fd_table->fd_used_list[2] = true;
+}
+
+static struct fd_t* _get_fd_entry(struct fd_table_t* fd_table, uint32_t fd){
+    struct list_elem *e;
+    struct fd_t* fd_entry = NULL;
+    for (e = list_begin (&(fd_table->fd_list)); e != list_end (&(fd_table->fd_list));
+        e = list_next (e)){
+        struct fd_t *fd_t = list_entry (e, struct fd_t, list_elem);
+        if(fd_t->fd == fd){
+            fd_entry = fd_t; 
+        }
+    }
+    return fd_entry;
 }
 
 struct file* get_open_file(struct fd_table_t* fd_table, uint32_t fd){
@@ -48,12 +60,12 @@ struct file* get_open_file(struct fd_table_t* fd_table, uint32_t fd){
         e = list_next (e)){
         struct fd_t *fd_t = list_entry (e, struct fd_t, list_elem);
         if(fd_t->fd == fd){
-            file = fd_t->file; 
+            file = fd_t->file;
+            break;
         }
     }
     return file;
 }
-
 
 bool open_file(struct fd_table_t* fd_table, char* filename, uint32_t* fd_out){
     if(!(_next_free_fd(fd_table, fd_out))){
@@ -63,9 +75,30 @@ bool open_file(struct fd_table_t* fd_table, char* filename, uint32_t* fd_out){
     if(!file){
         return false;
     }
-    struct fd_t fd;
-    fd.fd = fd_out;
-    fd.file = file;
-    list_push_back(&(fd_table->fd_list), &fd.list_elem);
+    struct fd_t* fd_entry = (struct fd_t*)malloc(sizeof(struct fd_t));
+    fd_entry->fd = *fd_out;
+    fd_entry->file = file;
+    list_push_back(&(fd_table->fd_list), &fd_entry->list_elem);
     return true;
+}
+
+bool close_file(struct fd_table_t* fd_table,  uint32_t fd){
+    struct fd_t* fd_entry = _get_fd_entry(fd_table, fd);
+    if(!fd_entry){
+      // Failed to get open file
+      return false;
+    }
+    list_remove(&fd_entry->list_elem);
+    fd_table->fd_used_list[fd] = false;
+    free(fd_entry);
+    return true;
+}
+
+void close_all_file(struct fd_table_t* fd_table){
+    struct list_elem *e;
+    for (e = list_begin (&(fd_table->fd_list)); e != list_end (&(fd_table->fd_list));
+        e = list_next (e)){
+        struct fd_t *fd_entry = list_entry (e, struct fd_t, list_elem);
+        free(fd_entry);
+    }
 }

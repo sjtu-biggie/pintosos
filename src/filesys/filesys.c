@@ -2,13 +2,19 @@
 #include <debug.h>
 #include <stdio.h>
 #include <string.h>
+#include "threads/synch.h"
 #include "filesys/file.h"
 #include "filesys/free-map.h"
 #include "filesys/inode.h"
 #include "filesys/directory.h"
 
+/* Coarse file system lock */
+
+
 /* Partition that contains the file system. */
 struct block *fs_device;
+
+struct lock filesys_lock;
 
 static void do_format (void);
 
@@ -17,6 +23,7 @@ static void do_format (void);
 void
 filesys_init (bool format) 
 {
+  lock_init(&filesys_lock);
   fs_device = block_get_role (BLOCK_FILESYS);
   if (fs_device == NULL)
     PANIC ("No file system device found, can't initialize file system.");

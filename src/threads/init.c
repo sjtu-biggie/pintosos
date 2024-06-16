@@ -285,7 +285,7 @@ run_task (char **argv)
   
   printf ("Executing '%s':\n", task);
 #ifdef USERPROG
-  struct exec_block_t* exec_block = thread_create_exec_block(thread_current()->tid);
+  struct exec_block_t* exec_block = thread_create_exec_block(thread_current()->tid, true);
   process_wait (process_execute (task));
 #else
   run_test (task);

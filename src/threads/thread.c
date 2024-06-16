@@ -341,7 +341,7 @@ void
 thread_exit (void) 
 {
   ASSERT (!intr_context ());
-
+  debug_printf("thread %d exit\n", thread_current()->tid);
   struct exec_block_t* block = thread_get_exec_block_from_child(thread_current()->tid);
   if(block){
     if(block->status != THREAD_EXIT){
@@ -354,7 +354,9 @@ thread_exit (void)
     sema_up(&block->exec_sem);
   }
 
+
 #ifdef USERPROG
+  close_all_file(&thread_current()->fd_table);
   process_exit ();
 #endif
 
@@ -697,15 +699,12 @@ init_thread (struct thread *t, const char *name, int priority)
   ASSERT (t != NULL);
   ASSERT (PRI_MIN <= priority && priority <= PRI_MAX);
   ASSERT (name != NULL);
-  char* t1 = (char*)malloc(100); 
   memset (t, 0, sizeof *t);
   t->status = THREAD_BLOCKED;
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
   t->magic = THREAD_MAGIC;
-  t1[0] = 's';
-  free(t1);
   t->sleep_time = THREAD_NOT_SLEEP;
   sema_init(&t->sleep_semaphore, 0);
   list_init(&t->priority_list);
@@ -890,11 +889,12 @@ void thread_exec_block_init(tid_t parent_tid, tid_t child_tid){
   lock_release(&exec_list_lock);
 }
 
-struct exec_block_t* thread_create_exec_block(tid_t parent_tid){
+struct exec_block_t* thread_create_exec_block(tid_t parent_tid, bool initial){
     struct exec_block_t* exec_block = (struct exec_block_t*)malloc(sizeof(struct exec_block_t));
     ASSERT(exec_block);
     exec_block->ppid = parent_tid;
     exec_block->command = NULL;
+    exec_block->initial = initial;
     sema_init(&exec_block->exec_sem, 0);
     lock_acquire(&exec_list_lock);
     list_push_back(&exec_list, &exec_block->list_elem);
