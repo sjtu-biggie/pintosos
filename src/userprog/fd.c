@@ -1,6 +1,8 @@
 #include "userprog/fd.h"
 #include "filesys/filesys.h"
+#include "filesys/file.h"
 #include <debug.h>
+#include <stdio.h>
 #include "threads/malloc.h"
 static bool _next_free_fd(struct fd_table_t* fd_table, uint32_t* fd_out);
 // /* Returns a hash value for fd p. */
@@ -95,10 +97,12 @@ bool close_file(struct fd_table_t* fd_table,  uint32_t fd){
 }
 
 void close_all_file(struct fd_table_t* fd_table){
-    struct list_elem *e;
-    for (e = list_begin (&(fd_table->fd_list)); e != list_end (&(fd_table->fd_list));
-        e = list_next (e)){
+    struct list_elem *e = list_begin (&(fd_table->fd_list));
+    while(e != list_end (&(fd_table->fd_list))){
         struct fd_t *fd_entry = list_entry (e, struct fd_t, list_elem);
+        struct list_elem *tmp = e;
+        e = list_next (e);
+        list_remove(tmp);
         free(fd_entry);
     }
 }

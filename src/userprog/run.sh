@@ -1,0 +1,1 @@
+pintos -v -k -T 60 --qemu  --filesys-size=2 -p tests/userprog/$1 -a $1 -- -q  -f run $1 

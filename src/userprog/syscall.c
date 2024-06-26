@@ -20,6 +20,8 @@
 #define READ_ERROR -1
 #define READ_SUCCESS 0
 
+#define CHUNK 128
+
 static void syscall_handler (struct intr_frame *);
 static bool is_valid(const void* vaddr);
 static void* thread_exit_with_status(int status);
@@ -144,7 +146,9 @@ syscall_handler (struct intr_frame *f UNUSED)
     }
 
     uint32_t fd_out;
+    lock_acquire(&filesys_lock);
     bool success = open_file(fd_table, filename, &fd_out);
+    lock_release(&filesys_lock);
     if(!success){
       debug_printf("ERROR: failed to open file%p\n", filename);
       f->eax = -1;
@@ -162,6 +166,7 @@ syscall_handler (struct intr_frame *f UNUSED)
     }
 
     lock_acquire(&filesys_lock);
+    debug_printf("size:%d\n", file_length(file));
     f->eax = file_length(file);
     lock_release(&filesys_lock);
     break;
@@ -193,6 +198,7 @@ syscall_handler (struct intr_frame *f UNUSED)
       size_read = file_read(file, buffer, size);
       lock_release(&filesys_lock);
     }
+    // debug_printf("expect size: %d, size_read %d\n", size, size_read);
     f->eax = size_read;
     break;
   }
@@ -200,6 +206,7 @@ syscall_handler (struct intr_frame *f UNUSED)
     uint32_t fd = GET_ARGUMENT(f->esp, 1, uint32_t);
     const char* buffer = GET_ARGUMENT(f->esp, 2, char*);
     unsigned size = GET_ARGUMENT(f->esp, 3, unsigned);
+    if(size == 0) return;
 
     uint32_t size_written = 0;
     if(!is_valid(buffer)){
@@ -207,7 +214,11 @@ syscall_handler (struct intr_frame *f UNUSED)
       thread_exit_with_status(-1);
     }
     if(fd == STDOUT_FILENO){
-      putbuf(buffer, size);
+      // printf("size: %d\n", size);
+      int iteration = (size - 1) / CHUNK;
+      for(int i = 0; i <= iteration; ++i){
+        putbuf(buffer + iteration * CHUNK,  size);
+      }
       size_written = size;
     }else{
       struct file* file = get_open_file(fd_table, fd);
@@ -222,6 +233,7 @@ syscall_handler (struct intr_frame *f UNUSED)
     }      
 
     f->eax = size_written;
+    // debug_printf("expect size: %d, size_write %d\n", size, size_written);
     break;
   }
   case SYS_SEEK:{
