@@ -136,6 +136,7 @@ check_file_handle (int fd,
               block_size, ofs, file_name, ret_val);
 
       compare_bytes (block, buf + ofs, block_size, ofs, file_name);
+      msg("ofs: %d\n", ofs);
       ofs += block_size;
     }
 

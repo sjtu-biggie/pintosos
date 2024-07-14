@@ -14,6 +14,9 @@
 #include "threads/vaddr.h"
 #include "threads/fpoint.h"
 #include "threads/scheduler.h"
+#include "filesys/directory.h"
+#include "filesys/file.h"
+#include "filesys/filesys.h"
 
 #ifdef USERPROG
 #include "userprog/process.h"
@@ -23,7 +26,6 @@
    Used to detect stack overflow.  See the big comment at the top
    of thread.h for details. */
 #define THREAD_MAGIC 0xcd6abf4b
-
 
 /* List of processes in THREAD_READY state, that is, processes
    that are ready to run but not actually running. */
@@ -41,6 +43,10 @@ static struct thread *initial_thread;
 
 /* Lock used by allocate_tid(). */
 static struct lock tid_lock;
+
+
+static struct list exec_list;
+static struct lock exec_list_lock;
 
 /* Stack frame for kernel_thread(). */
 struct kernel_thread_frame 
@@ -79,7 +85,6 @@ static tid_t allocate_tid (void);
 static void try_awake(struct thread *t, void* current_time);
 static void recalculate_priority(struct thread *t, void* _);
 static void recalculate_recent_cpu(struct thread *t, void* _);
-static bool is_current_idle();
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
    general and it is possible in this case only because loader.S
@@ -99,8 +104,10 @@ thread_init (void)
   ASSERT (intr_get_level () == INTR_OFF);
 
   lock_init (&tid_lock);
+  lock_init (&exec_list_lock);
   list_init (&ready_list);
   list_init (&all_list);
+  list_init (&exec_list);
 
   /* Scheduler Settings */
   if(thread_mlfqs){
@@ -114,8 +121,6 @@ thread_init (void)
   init_thread (initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
-
-
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -159,7 +164,6 @@ thread_tick (void)
     }
     /* Calculate recent_cpu and load_average*/
     if(timer_ticks() % TIMER_FREQ == 0){
-      // printf("%d, %d\n",  list_size(&ready_list), div(to_fixed_point(1), to_fixed_point(60)) * list_size(&ready_list));
       int ready_thread_counts = list_size(&ready_list) + is_not_idle;
       fixed_point load_avg_1 = times(div(to_fixed_point(59), to_fixed_point(60)), load_avg);
       fixed_point load_avg_2 = times_constant(div(to_fixed_point(1), to_fixed_point(60)), ready_thread_counts);
@@ -221,7 +225,6 @@ thread_create (const char *name, int priority,
   struct switch_entry_frame *ef;
   struct switch_threads_frame *sf;
   tid_t tid;
-
   ASSERT (function != NULL);
 
   /* Allocate thread. */
@@ -247,6 +250,9 @@ thread_create (const char *name, int priority,
   sf = alloc_frame (t, sizeof *sf);
   sf->eip = switch_entry;
   sf->ebp = 0;
+
+  /* Fill in child thread id*/
+  thread_exec_block_init(thread_current()->tid, tid);
 
   /* Add to run queue. */
   thread_unblock (t);
@@ -337,6 +343,45 @@ void
 thread_exit (void) 
 {
   ASSERT (!intr_context ());
+  debug_printf("thread %d exit\n", thread_current()->tid);
+  struct exec_block_t* block = thread_get_exec_block_from_child(thread_current()->tid);
+
+#ifdef USERPROG
+  close_all_file(&thread_current()->fd_table);
+#endif
+
+  if(block){
+    ASSERT(block->command);
+
+    if(block->status != THREAD_EXIT){
+        block->status = THREAD_KILLED;
+        thread_current()->exit_status = -1;
+    }
+
+    block->exit_status = thread_current()->exit_status;
+    printf("%s: exit(%d)\n", block->command, block->exit_status);
+
+    /* Deny Write to Executable*/
+    lock_acquire(&filesys_lock);
+    file_close(block->executable);
+    lock_release(&filesys_lock);
+
+    // Status can be PARENT_DIED / THREAD_EXIT / OTHERS
+    if(block->status == PARENT_DIED){
+      // Parent died, remove block here
+      list_remove(&block->list_elem);
+      if(block->command){
+        free(block->command);
+        block->command = NULL;
+      }
+      free(block);
+    }else{
+      // Parent still alive, will let parent to handle deletion
+      sema_up(&block->exec_sem);
+    } 
+  }
+  // Tell all living children that parent exit, if any
+  thread_clear_exec_block_as_parent(thread_current()->tid);
 
 #ifdef USERPROG
   process_exit ();
@@ -388,10 +433,9 @@ thread_foreach (thread_action_func *func, void *aux)
     }
 }
 
-
 void
 print_thread_internal(struct thread* t){
-    printf("Thread %s, sleep_time %lld\n, priority %d", t->name, t->sleep_time, t->priority);
+    debug_printf("Thread %s, sleep_time %lld\n, priority %d", t->name, t->sleep_time, t->priority);
 }
 
 void
@@ -411,7 +455,6 @@ print_thread(char* name){
   }
   intr_set_level (old_level);
 }
-
 
 void
 thread_accept_donation(struct thread* receiver, struct thread* donator,  struct lock* l){
@@ -678,27 +721,31 @@ init_thread (struct thread *t, const char *name, int priority)
 {
   enum intr_level old_level;
 
+  t->ppid = -1; /*Will be replaced in thread_create*/
+
   ASSERT (t != NULL);
   ASSERT (PRI_MIN <= priority && priority <= PRI_MAX);
   ASSERT (name != NULL);
-
   memset (t, 0, sizeof *t);
   t->status = THREAD_BLOCKED;
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
   t->magic = THREAD_MAGIC;
-
   t->sleep_time = THREAD_NOT_SLEEP;
   sema_init(&t->sleep_semaphore, 0);
   list_init(&t->priority_list);
+  #ifdef USERPROG
+  fd_init(&t->fd_table);
+  #endif
+
   memset(&t->donation_blocks, 0, MAX_NESTED_LEVEL * sizeof(struct donation_block));
 
   t->wait_on_lock = NULL;
   t->wait_on_thread = NULL;
-
   t->nice = 0;
   t->recent_cpu = 0;
+  t->exit_status = 0;
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
@@ -738,7 +785,7 @@ _next_thread_to_run (void)
 
    At this function's invocation, we just switched from thread
    PREV, the new thread is already running, and interrupts are
-   still disabled.  This function is normally invoked by
+   still disabled.  This function is normally th by
    thread_schedule() as its final action before returning, but
    the first time a thread is scheduled it is called by
    switch_entry() (see switch.S).
@@ -819,3 +866,92 @@ allocate_tid (void)
 /* Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof (struct thread, stack);
+
+struct thread* get_thread_by_tid(tid_t tid){
+  struct list_elem *e;
+  struct thread *target = NULL;
+  for (e = list_begin (&all_list); e != list_end (&all_list);
+       e = list_next (e))
+    {
+      struct thread *t = list_entry (e, struct thread, allelem);
+      if(t->tid == tid){
+        target = t;
+        break;
+      }
+    }
+  return target;    
+}
+
+struct exec_block_t* thread_get_exec_block_from_child(tid_t tid){
+  lock_acquire(&exec_list_lock);
+  struct list_elem *e;
+  struct exec_block_t *target = NULL;
+  for (e = list_begin (&exec_list); e != list_end (&exec_list);
+       e = list_next (e))
+    {
+      struct exec_block_t *t = list_entry (e, struct exec_block_t, list_elem);
+      // debug_printf("Target child_id %d, actual parent_id %d child_id %d\n", tid,t->ppid, t->pid);
+      if(t->pid == tid){
+        target = t;
+        break;
+      }
+    }
+  lock_release(&exec_list_lock);
+  return target;
+}
+
+/*Called by parernt process in thread_create function*/
+void thread_exec_block_init(tid_t parent_tid, tid_t child_tid){
+  lock_acquire(&exec_list_lock);
+  debug_printf("Init exec block of parent_id %d and child_id %d\n", parent_tid, child_tid);
+  struct list_elem *e;
+  for (e = list_begin (&exec_list); e != list_end (&exec_list);
+       e = list_next (e))
+    {
+      struct exec_block_t *t = list_entry (e, struct exec_block_t, list_elem);
+      if(t->ppid == parent_tid && t->status == UNINITIALIZED){
+        t->pid = child_tid;
+        t->status = INIT_SUCCESS;
+        break;
+      }
+    }
+  lock_release(&exec_list_lock);
+}
+
+struct exec_block_t* thread_create_exec_block(tid_t parent_tid, bool initial){
+    struct exec_block_t* exec_block = (struct exec_block_t*)malloc(sizeof(struct exec_block_t));
+    ASSERT(exec_block);
+    exec_block->ppid = parent_tid;
+    exec_block->command = NULL;
+    exec_block->initial = initial;
+    exec_block->status = UNINITIALIZED;
+    sema_init(&exec_block->exec_sem, 0);
+    lock_acquire(&exec_list_lock);
+    list_push_back(&exec_list, &exec_block->list_elem);
+    lock_release(&exec_list_lock);
+    return exec_block;
+}
+
+void thread_clear_exec_block_as_parent(tid_t parent_tid){
+  lock_acquire(&exec_list_lock);
+  debug_printf("Clear exec block for parent_id %d\n", parent_tid);
+  struct list_elem *e;
+  for (e = list_begin (&exec_list); e != list_end (&exec_list);
+       e = list_next (e))
+    {
+      struct exec_block_t *t = list_entry (e, struct exec_block_t, list_elem);
+      if(t->ppid == parent_tid){
+        if(t->exit_status == THREAD_EXIT || t->exit_status == THREAD_KILLED){
+          list_remove(&t->list_elem);
+          if(t->command){
+            free(t->command);
+            t->command == NULL;
+          }
+          free(t);
+        }else{
+          t->exit_status = PARENT_DIED;
+        }
+      }
+    }
+  lock_release(&exec_list_lock);
+}

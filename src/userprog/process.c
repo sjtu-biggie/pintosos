@@ -4,6 +4,7 @@
 #include <round.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <list.h>
 #include <string.h>
 #include "userprog/gdt.h"
 #include "userprog/pagedir.h"
@@ -18,8 +19,11 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 
+#define MAX_PARAMS 32
+
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
+
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -50,21 +54,126 @@ process_execute (const char *file_name)
 static void
 start_process (void *file_name_)
 {
+  debug_printf("Command to parse %s\n", file_name_);
+
+  char* save_ptr;
+  char* token = strtok_r (file_name_, " ", &save_ptr);
+  
+  int child_tid = thread_current()->tid;
+  struct exec_block_t* block = thread_get_exec_block_from_child(child_tid);
+  
+  ASSERT(block != NULL);
+  
+  block->command = malloc(strlen(file_name_));
+  strlcpy(block->command, file_name_, strlen(file_name_) + 1);
+
+
   char *file_name = file_name_;
   struct intr_frame if_;
-  bool success;
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
-  success = load (file_name, &if_.eip, &if_.esp);
+
+  /* load */
+  bool success = load (file_name, &if_.eip, &if_.esp);
+
+  /* This happens in the second thread of the first process */
+  /* If parent thread called exec, signal it */
+  debug_printf("child %d load flag: %d, parent %d\n", child_tid, success, block->ppid);
+  block->status = success ? LOAD_SUCCESS : block->status;
+  // This `sema_up` is for exec-ed child only, so we don't do this on initial 
+  
+  /* Deny write to executable*/
+  lock_acquire(&filesys_lock);
+  block->executable = filesys_open(block->command);
+  if(block->executable){
+    file_deny_write(block->executable);
+  }
+  lock_release(&filesys_lock);
+
+  if(!block->initial){
+    sema_up(&block->exec_sem);
+  }
+
+  if(!success){
+    thread_current()->exit_status = -1;
+    palloc_free_page (file_name);
+    thread_exit ();
+  }
+
+  
+
+  char* position[MAX_PARAMS];
+  char* saved_param[MAX_PARAMS];
+
+  int index = 0;
+  for (; token != NULL; token = strtok_r (NULL, " ", &save_ptr)){
+    int len = strlen(token);
+    debug_printf("%s, %d\n",token, len);
+    saved_param[index] = (char*)malloc(len); 
+    strlcpy(saved_param[index++], token, len + 1);
+    ASSERT(index < MAX_PARAMS);
+  }
+  
+  debug_printf("argc: %d\n", index);
+
+  for(int i = index - 1; i >= 0; --i){
+    if_.esp = (char*)if_.esp - 1;
+    *(char*)if_.esp = '\0';
+    int len = strlen(saved_param[i]);
+    if_.esp = (char*)if_.esp - len;
+    memcpy(if_.esp, saved_param[i], len);
+    position[i] = if_.esp;
+    debug_printf("%p\n", if_.esp);
+  }
+
+  /* Argument Passing */
+  
+  //Align
+  int align_bytes = (unsigned long)if_.esp % 8;
+  debug_printf("Aligning %d bytes for %p\n", align_bytes, if_.esp);
+  if_.esp = (char*)if_.esp - align_bytes;
+  
+  // Empty Argv
+  if_.esp = (char*)if_.esp - sizeof(void*);
+  *(char**)if_.esp = 0;  
+
+  // Real Argv
+  for(int i = index - 1; i >= 0; --i){
+    if_.esp = (char*)if_.esp - sizeof(void*);
+    *(char**)if_.esp = position[i];
+    debug_printf("%p\n", if_.esp);
+  }
+
+  // argv ptr
+  char* argv = if_.esp;
+  if_.esp = (char*)if_.esp - sizeof(void*);
+  *(char**)if_.esp = argv;
+  debug_printf("%p\n", if_.esp);
+
+  // argc
+  if_.esp = (char*)if_.esp - sizeof(int);
+  *(int*)if_.esp = index;
+  debug_printf("%p\n", if_.esp);
+
+  // return address
+  if_.esp = (char*)if_.esp - sizeof(void*);
+  *(int*)if_.esp = 0;
+  int total_size = (int)PHYS_BASE - (int)if_.esp;
+  debug_printf("%d\n", total_size);
+  if(DEBUG){
+    hex_dump(0, if_.esp, total_size, true);
+  }
+
+  for(int i = index - 1; i >= 0; --i){
+    free(saved_param[i]);
+  }
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
-  if (!success) 
-    thread_exit ();
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -72,6 +181,8 @@ start_process (void *file_name_)
      arguments on the stack in the form of a `struct intr_frame',
      we just point the stack pointer (%esp) to our stack frame
      and jump to it. */
+    
+  
   asm volatile ("movl %0, %%esp; jmp intr_exit" : : "g" (&if_) : "memory");
   NOT_REACHED ();
 }
@@ -85,10 +196,30 @@ start_process (void *file_name_)
 
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
+
+   /*TODO double wait */
 int
 process_wait (tid_t child_tid UNUSED) 
 {
-  return -1;
+  // Step 1: check if child has exec block
+  debug_printf("Parent %d try calling process_wait on child %d\n", thread_current()->tid, child_tid);
+  struct exec_block_t* exec_block = thread_get_exec_block_from_child(child_tid);
+  if(!exec_block){
+    debug_printf("Exit block not found for %d:%d\n", thread_current()->tid, child_tid);
+    return -1;
+  }
+  sema_down(&exec_block->exec_sem);
+  int exit_status = exec_block->exit_status;
+  debug_printf("Parent %d wait to child %d with exit status %d\n", thread_current()->tid, child_tid, exit_status);
+
+  list_remove(&exec_block->list_elem);
+  if(exec_block->command){
+    free(exec_block->command);
+    exec_block->command = NULL; 
+  }
+  free(exec_block);
+
+  return exit_status;
 }
 
 /* Free the current process's resources. */
@@ -315,7 +446,6 @@ load (const char *file_name, void (**eip) (void), void **esp)
   file_close (file);
   return success;
 }
-
 /* load() helpers. */
 
 static bool install_page (void *upage, void *kpage, bool writable);
