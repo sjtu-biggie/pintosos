@@ -60,17 +60,16 @@ start_process (void *file_name_)
   char* token = strtok_r (file_name_, " ", &save_ptr);
   
   int child_tid = thread_current()->tid;
-  struct exec_block_t* block =  thread_get_exec_block_from_child(child_tid);
-  if(block){
-    block->command = malloc(strlen(file_name_));
-    strlcpy(block->command, file_name_, strlen(file_name_) + 1);
-  }
+  struct exec_block_t* block = thread_get_exec_block_from_child(child_tid);
+  
+  ASSERT(block != NULL);
+  
+  block->command = malloc(strlen(file_name_));
+  strlcpy(block->command, file_name_, strlen(file_name_) + 1);
+
 
   char *file_name = file_name_;
   struct intr_frame if_;
-  bool success;
-  char* position[MAX_PARAMS];
-  char* saved_param[MAX_PARAMS];
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
@@ -78,8 +77,37 @@ start_process (void *file_name_)
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
 
-  success = load (file_name, &if_.eip, &if_.esp);
-  /* Find the exec_status_t in exec_status_list */
+  /* load */
+  bool success = load (file_name, &if_.eip, &if_.esp);
+
+  /* This happens in the second thread of the first process */
+  /* If parent thread called exec, signal it */
+  debug_printf("child %d load flag: %d, parent %d\n", child_tid, success, block->ppid);
+  block->status = success ? LOAD_SUCCESS : block->status;
+  // This `sema_up` is for exec-ed child only, so we don't do this on initial 
+  
+  /* Deny write to executable*/
+  lock_acquire(&filesys_lock);
+  block->executable = filesys_open(block->command);
+  if(block->executable){
+    file_deny_write(block->executable);
+  }
+  lock_release(&filesys_lock);
+
+  if(!block->initial){
+    sema_up(&block->exec_sem);
+  }
+
+  if(!success){
+    thread_current()->exit_status = -1;
+    palloc_free_page (file_name);
+    thread_exit ();
+  }
+
+  
+
+  char* position[MAX_PARAMS];
+  char* saved_param[MAX_PARAMS];
 
   int index = 0;
   for (; token != NULL; token = strtok_r (NULL, " ", &save_ptr)){
@@ -102,7 +130,9 @@ start_process (void *file_name_)
     debug_printf("%p\n", if_.esp);
   }
 
-  // Align
+  /* Argument Passing */
+  
+  //Align
   int align_bytes = (unsigned long)if_.esp % 8;
   debug_printf("Aligning %d bytes for %p\n", align_bytes, if_.esp);
   if_.esp = (char*)if_.esp - align_bytes;
@@ -141,28 +171,9 @@ start_process (void *file_name_)
   for(int i = index - 1; i >= 0; --i){
     free(saved_param[i]);
   }
+
   /* If load failed, quit. */
   palloc_free_page (file_name);
-
-  /* This happens in the second thread of the first process */
-  /* If parent thread called exec, signal it */
-  if(block){
-    debug_printf("Thread %d has child %d load %d\n", block->ppid, child_tid, success);
-    if(success){
-      block->status = LOAD_SUCCESS;
-    }else{
-      block->status = LOAD_FAILURE;
-    }
-    // This `sema_up` is for exec-ed child only, so we don't do this on initial 
-    if(!block->initial){
-      sema_up(&block->exec_sem);
-    }
-  }else{
-    debug_printf("child %d load %d, no parents exec\n", child_tid, success);
-  }
-
-  if (!success) 
-    thread_exit ();
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -198,9 +209,16 @@ process_wait (tid_t child_tid UNUSED)
     return -1;
   }
   sema_down(&exec_block->exec_sem);
-  int exit_status = exec_block->status;
+  int exit_status = exec_block->exit_status;
+  debug_printf("Parent %d wait to child %d with exit status %d\n", thread_current()->tid, child_tid, exit_status);
+
   list_remove(&exec_block->list_elem);
+  if(exec_block->command){
+    free(exec_block->command);
+    exec_block->command = NULL; 
+  }
   free(exec_block);
+
   return exit_status;
 }
 

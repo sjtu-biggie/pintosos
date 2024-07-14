@@ -16,21 +16,22 @@ enum exec_status
   {
     UNINITIALIZED,        /* load() failure */
     INIT_SUCCESS,        /* load() failure */
-    LOAD_FAILURE,     /* load() failure */
     LOAD_SUCCESS,     /* Not running but ready to run. */
     THREAD_EXIT,     /* Not running but ready to run. */
     THREAD_KILLED,     /* Not running but ready to run. */
+    PARENT_DIED,
   };
 
 
 struct exec_block_t{
-   int pid;
-   int ppid;
-   int exit_status;
-   enum exec_status status;
-   struct semaphore exec_sem;
-   struct list_elem list_elem;
+   int pid;                   /* child tid */
+   int ppid;                  /* parent tid */
+   int exit_status;           /* child exit status */
+   enum exec_status status;    /* exec status */
+   struct semaphore exec_sem;   /* exec semaphore */
+   struct list_elem list_elem; 
    char* command;
+   struct file* executable;
    bool initial; // If the parent is the initial process
 };
 
@@ -164,7 +165,6 @@ struct thread
   };
 
 
-
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "-o mlfqs". */
@@ -210,11 +210,12 @@ int thread_get_load_avg (void);
 void thread_accept_donation(struct thread*, struct thread*, struct lock*);
 void thread_retrieve_donation(struct thread*, struct lock*);
 
-/* Exec */
+/* Exec and wait */
 struct thread* get_thread_by_tid(tid_t tid);
 struct exec_block_t* thread_get_exec_block_from_child(tid_t tid);
 void thread_exec_block_init(tid_t parent_tid, tid_t child_tid);
 struct exec_block_t* thread_create_exec_block(tid_t parent_tid, bool initial);
+void thread_clear_exec_block_as_parent(tid_t parent_tid);
 
 /* Debugging */
 void print_thread_internal(struct thread*);

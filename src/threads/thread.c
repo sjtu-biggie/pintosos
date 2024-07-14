@@ -14,6 +14,9 @@
 #include "threads/vaddr.h"
 #include "threads/fpoint.h"
 #include "threads/scheduler.h"
+#include "filesys/directory.h"
+#include "filesys/file.h"
+#include "filesys/filesys.h"
 
 #ifdef USERPROG
 #include "userprog/process.h"
@@ -161,7 +164,6 @@ thread_tick (void)
     }
     /* Calculate recent_cpu and load_average*/
     if(timer_ticks() % TIMER_FREQ == 0){
-      // printf("%d, %d\n",  list_size(&ready_list), div(to_fixed_point(1), to_fixed_point(60)) * list_size(&ready_list));
       int ready_thread_counts = list_size(&ready_list) + is_not_idle;
       fixed_point load_avg_1 = times(div(to_fixed_point(59), to_fixed_point(60)), load_avg);
       fixed_point load_avg_2 = times_constant(div(to_fixed_point(1), to_fixed_point(60)), ready_thread_counts);
@@ -343,20 +345,45 @@ thread_exit (void)
   ASSERT (!intr_context ());
   debug_printf("thread %d exit\n", thread_current()->tid);
   struct exec_block_t* block = thread_get_exec_block_from_child(thread_current()->tid);
-  if(block){
-    if(block->status != THREAD_EXIT){
-      block->status = THREAD_KILLED;
-    }
-    ASSERT(block->command);
-    block->exit_status = thread_current()->exit_status;
-    printf("%s: exit(%d)\n", block->command, block->exit_status);
-    free(block->command);
-    sema_up(&block->exec_sem);
-  }
-
 
 #ifdef USERPROG
   close_all_file(&thread_current()->fd_table);
+#endif
+
+  if(block){
+    ASSERT(block->command);
+
+    if(block->status != THREAD_EXIT){
+        block->status = THREAD_KILLED;
+        thread_current()->exit_status = -1;
+    }
+
+    block->exit_status = thread_current()->exit_status;
+    printf("%s: exit(%d)\n", block->command, block->exit_status);
+
+    /* Deny Write to Executable*/
+    lock_acquire(&filesys_lock);
+    file_close(block->executable);
+    lock_release(&filesys_lock);
+
+    // Status can be PARENT_DIED / THREAD_EXIT / OTHERS
+    if(block->status == PARENT_DIED){
+      // Parent died, remove block here
+      list_remove(&block->list_elem);
+      if(block->command){
+        free(block->command);
+        block->command = NULL;
+      }
+      free(block);
+    }else{
+      // Parent still alive, will let parent to handle deletion
+      sema_up(&block->exec_sem);
+    } 
+  }
+  // Tell all living children that parent exit, if any
+  thread_clear_exec_block_as_parent(thread_current()->tid);
+
+#ifdef USERPROG
   process_exit ();
 #endif
 
@@ -863,6 +890,7 @@ struct exec_block_t* thread_get_exec_block_from_child(tid_t tid){
        e = list_next (e))
     {
       struct exec_block_t *t = list_entry (e, struct exec_block_t, list_elem);
+      // debug_printf("Target child_id %d, actual parent_id %d child_id %d\n", tid,t->ppid, t->pid);
       if(t->pid == tid){
         target = t;
         break;
@@ -875,6 +903,7 @@ struct exec_block_t* thread_get_exec_block_from_child(tid_t tid){
 /*Called by parernt process in thread_create function*/
 void thread_exec_block_init(tid_t parent_tid, tid_t child_tid){
   lock_acquire(&exec_list_lock);
+  debug_printf("Init exec block of parent_id %d and child_id %d\n", parent_tid, child_tid);
   struct list_elem *e;
   for (e = list_begin (&exec_list); e != list_end (&exec_list);
        e = list_next (e))
@@ -895,9 +924,34 @@ struct exec_block_t* thread_create_exec_block(tid_t parent_tid, bool initial){
     exec_block->ppid = parent_tid;
     exec_block->command = NULL;
     exec_block->initial = initial;
+    exec_block->status = UNINITIALIZED;
     sema_init(&exec_block->exec_sem, 0);
     lock_acquire(&exec_list_lock);
     list_push_back(&exec_list, &exec_block->list_elem);
     lock_release(&exec_list_lock);
     return exec_block;
+}
+
+void thread_clear_exec_block_as_parent(tid_t parent_tid){
+  lock_acquire(&exec_list_lock);
+  debug_printf("Clear exec block for parent_id %d\n", parent_tid);
+  struct list_elem *e;
+  for (e = list_begin (&exec_list); e != list_end (&exec_list);
+       e = list_next (e))
+    {
+      struct exec_block_t *t = list_entry (e, struct exec_block_t, list_elem);
+      if(t->ppid == parent_tid){
+        if(t->exit_status == THREAD_EXIT || t->exit_status == THREAD_KILLED){
+          list_remove(&t->list_elem);
+          if(t->command){
+            free(t->command);
+            t->command == NULL;
+          }
+          free(t);
+        }else{
+          t->exit_status = PARENT_DIED;
+        }
+      }
+    }
+  lock_release(&exec_list_lock);
 }

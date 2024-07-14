@@ -4,6 +4,7 @@
 #include <debug.h>
 #include <stdio.h>
 #include "threads/malloc.h"
+#include "threads/thread.h"
 static bool _next_free_fd(struct fd_table_t* fd_table, uint32_t* fd_out);
 // /* Returns a hash value for fd p. */
 // static uint32_t fd_hash (const struct hash_elem *p_, void *aux UNUSED)
@@ -92,6 +93,7 @@ bool close_file(struct fd_table_t* fd_table,  uint32_t fd){
     }
     list_remove(&fd_entry->list_elem);
     fd_table->fd_used_list[fd] = false;
+    file_close(fd_entry->file);
     free(fd_entry);
     return true;
 }
@@ -103,6 +105,8 @@ void close_all_file(struct fd_table_t* fd_table){
         struct list_elem *tmp = e;
         e = list_next (e);
         list_remove(tmp);
+        fd_table->fd_used_list[fd_entry->fd] = false;
+        file_close(fd_entry->file);
         free(fd_entry);
     }
 }

@@ -81,22 +81,39 @@ syscall_handler (struct intr_frame *f UNUSED)
     thread_exit_with_status(status);
     break;
   }
-  case SYS_EXEC:{
+  case SYS_EXEC:{ // 2
     const char* cmd_line = GET_ARGUMENT(f->esp, 1, char*);
-    if(!is_valid(cmd_line)){
-      debug_printf("ERROR: exec failed due to invalid filename %p\n", cmd_line);
+
+    // Check the cmd_line one char by one char since strlen will panic 
+    uint32_t addr = (uint32_t)cmd_line;
+    while(is_valid(addr) &&  cmd_line[addr - (uint32_t)cmd_line] != '\0'){
+      ++addr;
+    }
+    if(!is_valid(addr)){
+      debug_printf("ERROR: exec failed due to invalid cmd line %p\n", cmd_line);
       thread_exit_with_status(-1);
     }
-    // Parent procesws
-    tid_t tid = process_execute(cmd_line);
-    f->eax = tid;
-    if(tid == TID_ERROR){
-      return;
-    }
-    struct exec_block_t* exec_block = thread_create_exec_block(current_thread->tid, false);
-    sema_down(&exec_block->exec_sem);
 
-    f->eax = exec_block->status == LOAD_FAILURE ? TID_ERROR : tid;
+    // Parent procesws
+    struct exec_block_t* exec_block = thread_create_exec_block(current_thread->tid, false);
+    tid_t tid = process_execute(cmd_line);
+    if(tid == TID_ERROR){
+      debug_printf("Exec Failed\n");
+    }else{
+      debug_printf("Thread %d exec child %d, start waiting\n", current_thread->tid, tid);
+      sema_down(&exec_block->exec_sem);
+      tid = exec_block->status == THREAD_KILLED ? TID_ERROR : tid;
+    }
+    if(tid == TID_ERROR){
+      list_remove(&exec_block->list_elem);
+      if(exec_block->command){
+        free(exec_block->command);
+        exec_block->command = NULL;
+      }
+      free(exec_block);
+    }
+
+    f->eax = tid;
     break;
   }
   case SYS_WAIT:{
@@ -179,8 +196,7 @@ syscall_handler (struct intr_frame *f UNUSED)
     uint32_t size_read = 0;
     if(!is_valid(buffer)){
       debug_printf("ERROR: writing failed due to invalid user buffer %p\n", buffer);
-      f->eax = READ_ERROR;
-      return;
+      thread_exit_with_status(-1);
     }
     if(fd == STDIN_FILENO){
       uint8_t key = input_getc();
@@ -206,7 +222,10 @@ syscall_handler (struct intr_frame *f UNUSED)
     uint32_t fd = GET_ARGUMENT(f->esp, 1, uint32_t);
     const char* buffer = GET_ARGUMENT(f->esp, 2, char*);
     unsigned size = GET_ARGUMENT(f->esp, 3, unsigned);
-    if(size == 0) return;
+    if(size == 0){
+      f->eax = 0;
+      return;
+    }
 
     uint32_t size_written = 0;
     if(!is_valid(buffer)){
@@ -267,6 +286,7 @@ syscall_handler (struct intr_frame *f UNUSED)
     lock_acquire(&filesys_lock);
     if(!close_file(fd_table, fd)){
       debug_printf("ERROR: closing file failed %d\n", fd);
+      lock_release(&filesys_lock);
       thread_exit_with_status(-1);
     }
     lock_release(&filesys_lock);
