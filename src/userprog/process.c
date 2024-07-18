@@ -80,11 +80,8 @@ start_process (void *file_name_)
   /* load */
   bool success = load (file_name, &if_.eip, &if_.esp);
 
-  /* This happens in the second thread of the first process */
-  /* If parent thread called exec, signal it */
   debug_printf("child %d load flag: %d, parent %d\n", child_tid, success, block->ppid);
   block->status = success ? LOAD_SUCCESS : block->status;
-  // This `sema_up` is for exec-ed child only, so we don't do this on initial 
   
   /* Deny write to executable*/
   lock_acquire(&filesys_lock);
@@ -103,8 +100,6 @@ start_process (void *file_name_)
     palloc_free_page (file_name);
     thread_exit ();
   }
-
-  
 
   char* position[MAX_PARAMS];
   char* saved_param[MAX_PARAMS];

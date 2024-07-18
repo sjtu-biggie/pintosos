@@ -24,15 +24,15 @@ enum exec_status
 
 
 struct exec_block_t{
-   int pid;                   /* child tid */
-   int ppid;                  /* parent tid */
-   int exit_status;           /* child exit status */
-   enum exec_status status;    /* exec status */
+   int pid;                     /* child tid */
+   int ppid;                    /* parent tid */
+   int exit_status;             /* child exit status */
+   enum exec_status status;     /* exec status */
    struct semaphore exec_sem;   /* exec semaphore */
    struct list_elem list_elem; 
-   char* command;
+   char* command;               /* Whar command it is exec-ing */
    struct file* executable;
-   bool initial; // If the parent is the initial process
+   bool initial;                /* If the parent is the initial process */
 };
 
 /* States in a thread's life cycle. */
