@@ -36,7 +36,7 @@ frame_entry_t* find_eviction_frame(void){
     return NULL;
 }
 
-uint8_t * get_new_frame(void){
+frame_entry_t * get_new_frame(void){
     uint8_t *kpage = palloc_get_page (PAL_USER); // Pointer pointing to the page
     int try_count = 0;
     while(kpage == NULL){
@@ -51,7 +51,7 @@ uint8_t * get_new_frame(void){
     frame_entry_t* entry = (frame_entry_t*)malloc(sizeof(frame_entry_t));
     entry->kpage = kpage;
     list_push_back(&(frame_table.frame_entry_list), &(entry->list_elem));
-    return kpage;
+    return entry;
 }
 
 

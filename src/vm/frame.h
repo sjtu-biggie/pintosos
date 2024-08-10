@@ -6,7 +6,6 @@
 #include <stdint.h>
 #include <list.h>
 
-uint8_t * get_new_frame(void);
 
 typedef struct frame_table_t {
     struct list frame_entry_list;
@@ -22,6 +21,7 @@ typedef struct frame_entry_t {
     struct thread* owner; // updated by caller of get_new_frame 
 } frame_entry_t;
 
+frame_entry_t * get_new_frame(void);
 void evict_frame(frame_entry_t* frame_to_evict);
 void frame_init(void);
 
