@@ -690,6 +690,10 @@ static void init_thread(struct thread *t, const char *name, int priority) {
 	fd_init(&t->fd_table);
 #endif
 
+#ifdef VM
+	page_table_init(&t->page_table);
+#endif
+
 	memset(&t->donation_blocks, 0,
 		   MAX_NESTED_LEVEL * sizeof(struct donation_block));
 

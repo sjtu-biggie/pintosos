@@ -38,6 +38,10 @@ static inline uintptr_t pd_no (const void *va) {
   return (uintptr_t) va >> PDSHIFT;
 }
 
+static inline uint32_t page_no(const void* va){
+  return (uintptr_t) va >> PTSHIFT;
+}
+
 /* Page directory and page table entries.
 
    For more information see the section on page tables in the
@@ -101,6 +105,10 @@ static inline uint32_t pte_create_user (void *page, bool writable) {
    to. */
 static inline void *pte_get_page (uint32_t pte) {
   return ptov (pte & PTE_ADDR);
+}
+
+static inline uint32_t pte_get_page_no(void *page){
+  return page_no(page);
 }
 
 #endif /* threads/pte.h */

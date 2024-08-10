@@ -19,6 +19,10 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 
+#ifdef VM
+#include "vm/frame.h"
+#endif
+
 #define MAX_PARAMS 32
 
 static thread_func start_process NO_RETURN;
@@ -54,7 +58,7 @@ process_execute (const char *file_name)
 static void
 start_process (void *file_name_)
 {
-  debug_printf("Command to parse %s\n", file_name_);
+  debug_printf("Command to parse %s\n", (char*)file_name_);
 
   char* save_ptr;
   char* token = strtok_r (file_name_, " ", &save_ptr);
@@ -522,14 +526,18 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
       /* Get a page of memory. */
-      uint8_t *kpage = palloc_get_page (PAL_USER);
+      // uint8_t *kpage = palloc_get_page (PAL_USER);
+      frame_entry_t *frame_entry = get_new_frame();
+      frame_entry->owner = thread_current();
+      frame_entry->upage = upage;
+      uint8_t* kpage = frame_entry->kpage;
       if (kpage == NULL)
         return false;
 
       /* Load this page. */
       if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
         {
-          palloc_free_page (kpage);
+          evict_frame(frame_entry);
           return false; 
         }
       memset (kpage + page_read_bytes, 0, page_zero_bytes);
@@ -537,7 +545,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       /* Add the page to the process's address space. */
       if (!install_page (upage, kpage, writable)) 
         {
-          palloc_free_page (kpage);
+          evict_frame(frame_entry);
           return false; 
         }
 

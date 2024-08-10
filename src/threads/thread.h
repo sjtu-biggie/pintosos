@@ -8,9 +8,14 @@
 #include "threads/scheduler.h"
 #include "threads/fpoint.h"
 
+#ifdef VM
+#include "vm/page.h"
+#endif
+
 #ifdef USERPROG
 #include "userprog/fd.h"
 #endif
+
 
 enum exec_status
   {
@@ -139,6 +144,11 @@ struct thread
     #ifdef USERPROG
     /* File descriptor */
     struct fd_table_t fd_table;
+    #endif
+
+    #ifdef VM
+    /* Supplemental page table */
+    page_table_t page_table;
     #endif
 
     // Maximum 8 nested level

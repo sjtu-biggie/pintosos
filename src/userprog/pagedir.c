@@ -52,7 +52,7 @@ pagedir_destroy (uint32_t *pd)
    on CREATE.  If CREATE is true, then a new page table is
    created and a pointer into it is returned.  Otherwise, a null
    pointer is returned. */
-static uint32_t *
+uint32_t *
 lookup_page (uint32_t *pd, const void *vaddr, bool create)
 {
   uint32_t *pt, *pde;
@@ -83,6 +83,7 @@ lookup_page (uint32_t *pd, const void *vaddr, bool create)
   pt = pde_get_pt (*pde);
   return &pt[pt_no (vaddr)];
 }
+
 
 /* Adds a mapping in page directory PD from user virtual page
    UPAGE to the physical frame identified by kernel virtual
@@ -163,8 +164,14 @@ bool
 pagedir_is_dirty (uint32_t *pd, const void *vpage) 
 {
   uint32_t *pte = lookup_page (pd, vpage, false);
+  return pte_is_dirty(pte);
+}
+
+bool pte_is_dirty(uint32_t *pte)
+{
   return pte != NULL && (*pte & PTE_D) != 0;
 }
+
 
 /* Set the dirty bit to DIRTY in the PTE for virtual page VPAGE
    in PD. */
@@ -192,6 +199,11 @@ bool
 pagedir_is_accessed (uint32_t *pd, const void *vpage) 
 {
   uint32_t *pte = lookup_page (pd, vpage, false);
+  return pte_is_accessed(pte);
+}
+
+bool pte_is_accessed(uint32_t *pte)
+{
   return pte != NULL && (*pte & PTE_A) != 0;
 }
 

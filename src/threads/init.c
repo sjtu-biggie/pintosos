@@ -127,6 +127,10 @@ main (void)
   filesys_init (format_filesys);
 #endif
 
+#ifdef VM
+  /* Initialize the virtual Memory */
+#endif
+
   printf ("Boot complete.\n");
   
   /* Run actions specified on kernel command line. */
@@ -136,7 +140,7 @@ main (void)
   shutdown ();
   thread_exit ();
 }
-
+
 /* Clear the "BSS", a segment that should be initialized to
    zeros.  It isn't actually stored on disk or zeroed by the
    kernel loader, so we have to zero it ourselves.
@@ -165,6 +169,7 @@ paging_init (void)
   pt = NULL;
   for (page = 0; page < init_ram_pages; page++)
     {
+      printf("INIT RAM PAGES is %d", init_ram_pages); 
       uintptr_t paddr = page * PGSIZE;
       char *vaddr = ptov (paddr);
       size_t pde_idx = pd_no (vaddr);
@@ -285,7 +290,7 @@ run_task (char **argv)
   
   printf ("Executing '%s':\n", task);
 #ifdef USERPROG
-  struct exec_block_t* exec_block = thread_create_exec_block(thread_current()->tid, true);
+  thread_create_exec_block(thread_current()->tid, true);
   process_wait (process_execute (task));
 #else
   run_test (task);
