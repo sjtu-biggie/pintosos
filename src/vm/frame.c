@@ -62,10 +62,12 @@ void evict_frame(frame_entry_t* frame_to_evict){
     if(pagedir_is_dirty(frame_to_evict->owner->pagedir, frame_to_evict->upage)){
         // TODO: Write to file system or swap
         page_entry_t* page_entry = page_table_lookup(&frame_to_evict->owner->page_table, frame_to_evict->upage);
-        if(page_entry->source == FROM_FILE){
-
-        }else if(page_entry->source == FROM_SWAP){
-
+        if(page_entry->source == SOURCE_EXECUTABLE){
+            // TODO: swap table
+            ASSERT(0);
+        }else if(page_entry->source == SOURCE_MMAP){
+            // TODO: mmap file
+            ASSERT(0);
         }else{
             ASSERT(0);
         }

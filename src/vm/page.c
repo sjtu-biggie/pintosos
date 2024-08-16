@@ -32,6 +32,8 @@ page_entry_t* page_table_lookup(page_table_t* page_table, uint8_t* upage){
 
 page_entry_t* page_table_new_entry(page_table_t* page_table){
   page_entry_t* entry = (page_entry_t*)malloc(sizeof(page_entry_t));
+  entry->swap_id = -1;
+  entry->file_info.file = NULL;
   hash_insert(&page_table->hash_table, &entry->page_hash);
   return entry;
 }

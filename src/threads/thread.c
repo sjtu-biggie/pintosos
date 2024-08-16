@@ -74,7 +74,7 @@ static void kernel_thread(thread_func *, void *aux);
 static void idle(void *aux UNUSED);
 static struct thread *running_thread(void);
 static struct thread *_next_thread_to_run(void);
-static void init_thread(struct thread *, const char *name, int priority);
+static void init_thread(struct thread *, const char *name, int priority, bool user);
 static bool is_thread(struct thread *) UNUSED;
 static void *alloc_frame(struct thread *, size_t size);
 static void schedule(void);
@@ -114,7 +114,7 @@ void thread_init(void) {
 
 	/* Set up a thread structure for the running thread. */
 	initial_thread = running_thread();
-	init_thread(initial_thread, "main", PRI_DEFAULT);
+	init_thread(initial_thread, "main", PRI_DEFAULT, false);
 	initial_thread->status = THREAD_RUNNING;
 	initial_thread->tid = allocate_tid();
 }
@@ -125,7 +125,7 @@ void thread_start(void) {
 	/* Create the idle thread. */
 	struct semaphore idle_started;
 	sema_init(&idle_started, 0);
-	thread_create("idle", PRI_MIN, idle, &idle_started);
+	thread_create("idle", PRI_MIN, idle, &idle_started, false);
 
 	/* Start preemptive thread scheduling. */
 	intr_enable();
@@ -210,7 +210,7 @@ void thread_print_stats(void) {
    PRIORITY, but no actual priority scheduling is implemented.
    Priority scheduling is the goal of Problem 1-3. */
 tid_t thread_create(const char *name, int priority, thread_func *function,
-					void *aux) {
+					void *aux, bool user) {
 	struct thread *t;
 	struct kernel_thread_frame *kf;
 	struct switch_entry_frame *ef;
@@ -224,7 +224,7 @@ tid_t thread_create(const char *name, int priority, thread_func *function,
 		return TID_ERROR;
 
 	/* Initialize thread. */
-	init_thread(t, name, priority);
+	init_thread(t, name, priority, user);
 	tid = t->tid = allocate_tid();
 
 	/* Stack frame for kernel_thread(). */
@@ -669,7 +669,7 @@ static bool is_thread(struct thread *t) {
 
 /* Does basic initialization of T as a blocked thread named
    NAME. */
-static void init_thread(struct thread *t, const char *name, int priority) {
+static void init_thread(struct thread *t, const char *name, int priority, bool user) {
 	enum intr_level old_level;
 
 	t->ppid = -1; /*Will be replaced in thread_create*/
@@ -689,9 +689,10 @@ static void init_thread(struct thread *t, const char *name, int priority) {
 #ifdef USERPROG
 	fd_init(&t->fd_table);
 #endif
-
 #ifdef VM
-	page_table_init(&t->page_table);
+	if(user){
+		page_table_init(&initial_thread->page_table);
+	}
 #endif
 
 	memset(&t->donation_blocks, 0,

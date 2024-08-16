@@ -37,7 +37,9 @@
 #include "filesys/filesys.h"
 #include "filesys/fsutil.h"
 #endif
-
+#ifdef FILESYS
+#include "vm/frame.h"
+#endif
 /* Page directory with kernel mappings only. */
 uint32_t *init_page_dir;
 
@@ -128,6 +130,7 @@ main (void)
 #endif
 
 #ifdef VM
+  frame_init();
   /* Initialize the virtual Memory */
 #endif
 
@@ -169,7 +172,6 @@ paging_init (void)
   pt = NULL;
   for (page = 0; page < init_ram_pages; page++)
     {
-      printf("INIT RAM PAGES is %d", init_ram_pages); 
       uintptr_t paddr = page * PGSIZE;
       char *vaddr = ptov (paddr);
       size_t pde_idx = pd_no (vaddr);

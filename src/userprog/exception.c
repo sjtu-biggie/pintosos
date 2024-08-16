@@ -4,6 +4,8 @@
 #include "userprog/gdt.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "filesys/filesys.h"
+#include "filesys/file.h"
 #include "vm/page.h"
 
 
@@ -159,5 +161,31 @@ page_fault (struct intr_frame *f)
           write ? "writing" : "reading",
           user ? "user" : "kernel");
   kill (f);
+
+   // uint8_t* real_page = (uint8_t*)((uint32_t)fault_addr & 0xffffffc00);
+   // debug_printf("Fault addr: %p, real page: %p", fault_addr, real_page);
+
+   // ASSERT (pg_ofs (real_page) == 0);
+
+   // // Obtain page table entry
+   // page_entry_t* page_entry = page_table_lookup(thread_current()->page_table, (uint8_t*)real_page);
+
+   // // Obtain a new framne
+   // // TODO: Sharing
+   // frame_entry_t *frame_entry = get_new_frame();
+   // frame_entry->owner = thread_current();
+   // frame_entry->upage = real_page;
+
+   // // TODO: Check swap table
+   // if(page_entry->swap_exist){
+   //    ASSERT(0)
+   // }else{
+   // // When it is not in swap, we must get from file
+   // // The file should be ready here 
+   //    struct file* file = filesys_open(
+   // }
+
+   
+
 }
 

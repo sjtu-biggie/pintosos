@@ -6,10 +6,16 @@
 #include "filesys/file.h"
 
 enum source{
-    FROM_FILE,
-    FROM_SWAP,
-    FROM_VOID // No longer need to write back!
+    SOURCE_EXECUTABLE,
+    SOURCE_MMAP,
+    SOURCE_VOID // No longer need to write back!
 };
+
+typedef struct file_info_t {
+    struct file* file;
+    off_t ofs;
+    int size;
+} file_info_t;
 
 typedef struct page_table_t {
     struct hash hash_table;
@@ -19,9 +25,8 @@ typedef struct page_entry_t {
     struct hash_elem page_hash;
     enum source source;
     uint8_t* upage; //user virtual address
-    union {
-        struct file* file;
-    } page;
+    file_info_t file_info;
+    int swap_id;
 } page_entry_t;
 
 void page_table_init(page_table_t* page_table);

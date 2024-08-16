@@ -21,12 +21,13 @@
 
 #ifdef VM
 #include "vm/frame.h"
+#include "vm/page.h"
 #endif
 
 #define MAX_PARAMS 32
 
 static thread_func start_process NO_RETURN;
-static bool load (const char *cmdline, void (**eip) (void), void **esp);
+static bool load (const char *cmdline, void (**eip) (void), void **esp, struct file* executable);
 
 
 /* Starts a new thread running a user program loaded from
@@ -47,7 +48,7 @@ process_execute (const char *file_name)
   strlcpy (fn_copy, file_name, PGSIZE);
 
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy, true);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
   return tid;
@@ -68,6 +69,7 @@ start_process (void *file_name_)
   
   ASSERT(block != NULL);
   
+  /* It is the full path of executable */ 
   block->command = malloc(strlen(file_name_));
   strlcpy(block->command, file_name_, strlen(file_name_) + 1);
 
@@ -81,12 +83,6 @@ start_process (void *file_name_)
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
 
-  /* load */
-  bool success = load (file_name, &if_.eip, &if_.esp);
-
-  debug_printf("child %d load flag: %d, parent %d\n", child_tid, success, block->ppid);
-  block->status = success ? LOAD_SUCCESS : block->status;
-  
   /* Deny write to executable*/
   lock_acquire(&filesys_lock);
   block->executable = filesys_open(block->command);
@@ -94,6 +90,12 @@ start_process (void *file_name_)
     file_deny_write(block->executable);
   }
   lock_release(&filesys_lock);
+
+  /* load */
+  bool success = load (file_name, &if_.eip, &if_.esp, block->executable);
+  debug_printf("child %d load flag: %d, parent %d\n", child_tid, success, block->ppid);
+  block->status = success ? LOAD_SUCCESS : block->status;
+  
 
   if(!block->initial){
     sema_up(&block->exec_sem);
@@ -327,16 +329,17 @@ struct Elf32_Phdr
 
 static bool setup_stack (void **esp);
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
+// TODO: Optimize use of this function
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
                           uint32_t read_bytes, uint32_t zero_bytes,
-                          bool writable);
+                          bool writable, struct file *executable);
 
 /* Loads an ELF executable from FILE_NAME into the current thread.
    Stores the executable's entry point into *EIP
    and its initial stack pointer into *ESP.
    Returns true if successful, false otherwise. */
 bool
-load (const char *file_name, void (**eip) (void), void **esp) 
+load (const char *file_name, void (**eip) (void), void **esp, struct file* executable) 
 {
   struct thread *t = thread_current ();
   struct Elf32_Ehdr ehdr;
@@ -422,7 +425,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
                   zero_bytes = ROUND_UP (page_offset + phdr.p_memsz, PGSIZE);
                 }
               if (!load_segment (file, file_page, (void *) mem_page,
-                                 read_bytes, zero_bytes, writable))
+                                 read_bytes, zero_bytes, writable, executable))
                 goto done;
             }
           else
@@ -510,7 +513,7 @@ validate_segment (const struct Elf32_Phdr *phdr, struct file *file)
    or disk read error occurs. */
 static bool
 load_segment (struct file *file, off_t ofs, uint8_t *upage,
-              uint32_t read_bytes, uint32_t zero_bytes, bool writable) 
+              uint32_t read_bytes, uint32_t zero_bytes, bool writable, struct file* executable) 
 {
   ASSERT ((read_bytes + zero_bytes) % PGSIZE == 0);
   ASSERT (pg_ofs (upage) == 0);
@@ -526,17 +529,25 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
       /* Get a page of memory. */
-      // uint8_t *kpage = palloc_get_page (PAL_USER);
       frame_entry_t *frame_entry = get_new_frame();
       frame_entry->owner = thread_current();
       frame_entry->upage = upage;
       uint8_t* kpage = frame_entry->kpage;
+
+      /* Initialize the supplmental page entry*/
+      page_entry_t* page_entry = page_table_new_entry(&thread_current()->page_table);
+      page_entry->source = SOURCE_EXECUTABLE;
+      page_entry->file_info.file = executable;
+      page_entry->file_info.ofs = ofs;
+      page_entry->file_info.size = page_read_bytes;
+      
       if (kpage == NULL)
         return false;
 
       /* Load this page. */
       if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
         {
+          free(page_entry);
           evict_frame(frame_entry);
           return false; 
         }
@@ -545,6 +556,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       /* Add the page to the process's address space. */
       if (!install_page (upage, kpage, writable)) 
         {
+          free(page_entry);
           evict_frame(frame_entry);
           return false; 
         }
